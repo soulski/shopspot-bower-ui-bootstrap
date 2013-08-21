@@ -1123,8 +1123,8 @@ function ($compile, $parse, $document, $position, dateFilter, datepickerPopupCon
       ngModel.$parsers.push(parseDate);
 
       var getIsOpen, setIsOpen;
-      if ( attrs.open ) {
-        getIsOpen = $parse(attrs.open);
+      if ( attrs.isOpen ) {
+        getIsOpen = $parse(attrs.isOpen);
         setIsOpen = getIsOpen.assign;
 
         originalScope.$watch(getIsOpen, function updateOpen(value) {
@@ -1219,15 +1219,22 @@ function ($compile, $parse, $document, $position, dateFilter, datepickerPopupCon
         scope.position.top = scope.position.top + element.prop('offsetHeight');
       }
 
+      var documentBindingInitialized = false, elementFocusInitialized = false;
       scope.$watch('isOpen', function(value) {
         if (value) {
           updatePosition();
           $document.bind('click', documentClickBind);
-          element.unbind('focus', elementFocusBind);
-          element.focus();
+          if(elementFocusInitialized) {
+            element.unbind('focus', elementFocusBind);
+          }
+          element[0].focus();
+          documentBindingInitialized = true;
         } else {
-          $document.unbind('click', documentClickBind);
+          if(documentBindingInitialized) {
+            $document.unbind('click', documentClickBind);
+          }
           element.bind('focus', elementFocusBind);
+          elementFocusInitialized = true;
         }
 
         if ( setIsOpen ) {
@@ -1261,6 +1268,7 @@ function ($compile, $parse, $document, $position, dateFilter, datepickerPopupCon
     }
   };
 }]);
+
 // The `$dialogProvider` can be used to configure global defaults for your
 // `$dialog` service.
 var dialogModule = angular.module('ui.bootstrap.dialog', ['ui.bootstrap.transition']);
@@ -2663,7 +2671,7 @@ function($parse, $http, $templateCache, $compile) {
   }
 }])
 
-.directive('tabsetTitles', function($http) {
+.directive('tabsetTitles', ['$http', function($http) {
   return {
     restrict: 'A',
     require: '^tabset',
@@ -2680,21 +2688,12 @@ function($parse, $http, $templateCache, $compile) {
       }
     }
   };
-})
+}])
 
 ;
 
 
 angular.module('ui.bootstrap.timepicker', [])
-
-.filter('pad', function() {
-  return function(input) {
-    if ( angular.isDefined(input) && input.toString().length < 2 ) {
-      input = '0' + input;
-    }
-    return input;
-  };
-})
 
 .constant('timepickerConfig', {
   hourStep: 1,
@@ -2705,16 +2704,18 @@ angular.module('ui.bootstrap.timepicker', [])
   mousewheel: true
 })
 
-.directive('timepicker', ['padFilter', '$parse', 'timepickerConfig', function (padFilter, $parse, timepickerConfig) {
+.directive('timepicker', ['$parse', '$log', 'timepickerConfig', function ($parse, $log, timepickerConfig) {
   return {
     restrict: 'EA',
-    require:'ngModel',
+    require:'?^ngModel',
     replace: true,
+    scope: {},
     templateUrl: 'template/timepicker/timepicker.html',
-    scope: {
-        model: '=ngModel'
-    },
-    link: function(scope, element, attrs, ngModelCtrl) {
+    link: function(scope, element, attrs, ngModel) {
+      if ( !ngModel ) {
+        return; // do nothing if no ng-model
+      }
+
       var selected = new Date(), meridians = timepickerConfig.meridians;
 
       var hourStep = timepickerConfig.hourStep;
@@ -2735,28 +2736,27 @@ angular.module('ui.bootstrap.timepicker', [])
       scope.showMeridian = timepickerConfig.showMeridian;
       if (attrs.showMeridian) {
         scope.$parent.$watch($parse(attrs.showMeridian), function(value) {
-          scope.showMeridian = !! value;
+          scope.showMeridian = !!value;
 
-          if ( ! scope.model ) {
-            // Reset
-            var dt = new Date( selected );
-            var hours = getScopeHours();
-            if (angular.isDefined( hours )) {
-              dt.setHours( hours );
+          if ( ngModel.$error.time ) {
+            // Evaluate from template
+            var hours = getHoursFromTemplate(), minutes = getMinutesFromTemplate();
+            if (angular.isDefined( hours ) && angular.isDefined( minutes )) {
+              selected.setHours( hours );
+              refresh();
             }
-            scope.model = new Date( dt );
           } else {
-            refreshTemplate();
+            updateTemplate();
           }
         });
       }
 
       // Get scope.hours in 24H mode if valid
-      function getScopeHours ( ) {
+      function getHoursFromTemplate ( ) {
         var hours = parseInt( scope.hours, 10 );
         var valid = ( scope.showMeridian ) ? (hours > 0 && hours < 13) : (hours >= 0 && hours < 24);
         if ( !valid ) {
-          return;
+          return undefined;
         }
 
         if ( scope.showMeridian ) {
@@ -2770,14 +2770,22 @@ angular.module('ui.bootstrap.timepicker', [])
         return hours;
       }
 
+      function getMinutesFromTemplate() {
+        var minutes = parseInt(scope.minutes, 10);
+        return ( minutes >= 0 && minutes < 60 ) ? minutes : undefined;
+      }
+
+      function pad( value ) {
+        return ( angular.isDefined(value) && value.toString().length < 2 ) ? '0' + value : value;
+      }
+
       // Input elements
-      var inputs = element.find('input');
-      var hoursInputEl = inputs.eq(0), minutesInputEl = inputs.eq(1);
+      var inputs = element.find('input'), hoursInputEl = inputs.eq(0), minutesInputEl = inputs.eq(1);
 
       // Respond on mousewheel spin
       var mousewheel = (angular.isDefined(attrs.mousewheel)) ? scope.$eval(attrs.mousewheel) : timepickerConfig.mousewheel;
       if ( mousewheel ) {
-        
+
         var isScrollingUp = function(e) {
           if (e.originalEvent) {
             e = e.originalEvent;
@@ -2786,7 +2794,7 @@ angular.module('ui.bootstrap.timepicker', [])
           var delta = (e.wheelDelta) ? e.wheelDelta : -e.deltaY;
           return (e.detail || delta > 0);
         };
-        
+
         hoursInputEl.bind('mousewheel wheel', function(e) {
           scope.$apply( (isScrollingUp(e)) ? scope.incrementHours() : scope.decrementHours() );
           e.preventDefault();
@@ -2798,50 +2806,54 @@ angular.module('ui.bootstrap.timepicker', [])
         });
       }
 
-      var keyboardChange = false;
       scope.readonlyInput = (angular.isDefined(attrs.readonlyInput)) ? scope.$eval(attrs.readonlyInput) : timepickerConfig.readonlyInput;
       if ( ! scope.readonlyInput ) {
+
+        var invalidate = function(invalidHours, invalidMinutes) {
+          ngModel.$setViewValue( null );
+          ngModel.$setValidity('time', false);
+          if (angular.isDefined(invalidHours)) {
+            scope.invalidHours = invalidHours;
+          }
+          if (angular.isDefined(invalidMinutes)) {
+            scope.invalidMinutes = invalidMinutes;
+          }
+        };
+
         scope.updateHours = function() {
-          var hours = getScopeHours();
+          var hours = getHoursFromTemplate();
 
           if ( angular.isDefined(hours) ) {
-              keyboardChange = 'h';
-              if ( scope.model === null ) {
-                 scope.model = new Date( selected );
-              }
-              scope.model.setHours( hours );
+            selected.setHours( hours );
+            refresh( 'h' );
           } else {
-              scope.model = null;
-              scope.validHours = false;
+            invalidate(true);
           }
         };
 
         hoursInputEl.bind('blur', function(e) {
-          if ( scope.validHours && scope.hours < 10) {
+          if ( !scope.validHours && scope.hours < 10) {
             scope.$apply( function() {
-              scope.hours = padFilter( scope.hours );
+              scope.hours = pad( scope.hours );
             });
           }
         });
 
         scope.updateMinutes = function() {
-          var minutes = parseInt(scope.minutes, 10);
-          if ( minutes >= 0 && minutes < 60 ) {
-            keyboardChange = 'm';
-            if ( scope.model === null ) {
-              scope.model = new Date( selected );
-            }
-            scope.model.setMinutes( minutes );
+          var minutes = getMinutesFromTemplate();
+
+          if ( angular.isDefined(minutes) ) {
+            selected.setMinutes( minutes );
+            refresh( 'm' );
           } else {
-            scope.model = null;
-            scope.validMinutes = false;
+            invalidate(undefined, true);
           }
         };
 
         minutesInputEl.bind('blur', function(e) {
-          if ( scope.validMinutes && scope.minutes < 10 ) {
+          if ( !scope.invalidMinutes && scope.minutes < 10 ) {
             scope.$apply( function() {
-              scope.minutes = padFilter( scope.minutes );
+              scope.minutes = pad( scope.minutes );
             });
           }
         });
@@ -2850,38 +2862,49 @@ angular.module('ui.bootstrap.timepicker', [])
         scope.updateMinutes = angular.noop;
       }
 
-      scope.$watch( function getModelTimestamp() {
-        return +scope.model;
-      }, function( timestamp ) {
-        if ( !isNaN( timestamp ) && timestamp > 0 ) {
-          selected = new Date( timestamp );
-          refreshTemplate();
-        }
-      });
+      ngModel.$render = function() {
+        var date = ngModel.$modelValue ? new Date( ngModel.$modelValue ) : null;
 
-      function refreshTemplate() {
-        var hours = selected.getHours();
+        if ( isNaN(date) ) {
+          ngModel.$setValidity('time', false);
+          $log.error('Timepicker directive: "ng-model" value must be a Date object, a number of milliseconds since 01.01.1970 or a string representing an RFC2822 or ISO 8601 date.');
+        } else {
+          if ( date ) {
+            selected = date;
+          }
+          makeValid();
+          updateTemplate();
+        }
+      };
+
+      // Call internally when we know that model is valid.
+      function refresh( keyboardChange ) {
+        makeValid();
+        ngModel.$setViewValue( new Date(selected) );
+        updateTemplate( keyboardChange );
+      }
+
+      function makeValid() {
+        ngModel.$setValidity('time', true);
+        scope.invalidHours = false;
+        scope.invalidMinutes = false;
+      }
+
+      function updateTemplate( keyboardChange ) {
+        var hours = selected.getHours(), minutes = selected.getMinutes();
+
         if ( scope.showMeridian ) {
-          // Convert 24 to 12 hour system
-          hours = ( hours === 0 || hours === 12 ) ? 12 : hours % 12;
+          hours = ( hours === 0 || hours === 12 ) ? 12 : hours % 12; // Convert 24 to 12 hour system
         }
-        scope.hours =  ( keyboardChange === 'h' ) ? hours : padFilter(hours);
-        scope.validHours = true;
-
-        var minutes = selected.getMinutes();
-        scope.minutes = ( keyboardChange === 'm' ) ? minutes : padFilter(minutes);
-        scope.validMinutes = true;
-
-        scope.meridian = ( scope.showMeridian ) ? (( selected.getHours() < 12 ) ? meridians[0] : meridians[1]) : '';
-
-        keyboardChange = false;
+        scope.hours =  keyboardChange === 'h' ? hours : pad(hours);
+        scope.minutes = keyboardChange === 'm' ? minutes : pad(minutes);
+        scope.meridian = selected.getHours() < 12 ? meridians[0] : meridians[1];
       }
 
       function addMinutes( minutes ) {
         var dt = new Date( selected.getTime() + minutes * 60000 );
-        selected.setHours( dt.getHours() );
-        selected.setMinutes( dt.getMinutes() );
-        scope.model = new Date( selected );
+        selected.setHours( dt.getHours(), dt.getMinutes() );
+        refresh();
       }
 
       scope.incrementHours = function() {
@@ -3077,12 +3100,13 @@ angular.module('ui.bootstrap.typeahead', ['ui.bootstrap.position'])
           return inputFormatter(originalScope, locals);
 
         } else {
-          locals[parserResult.itemName] = modelValue;
 
           //it might happen that we don't have enough info to properly render input value
           //we need to check for this situation and simply return model value if we can't apply custom formatting
+          locals[parserResult.itemName] = modelValue;
           candidateViewValue = parserResult.viewMapper(originalScope, locals);
-          emptyViewValue = parserResult.viewMapper(originalScope, {});
+          locals[parserResult.itemName] = undefined;
+          emptyViewValue = parserResult.viewMapper(originalScope, locals);
 
           return candidateViewValue!== emptyViewValue ? candidateViewValue : modelValue;
         }
@@ -3242,8 +3266,8 @@ angular.module("template/carousel/carousel.html", []).run(["$templateCache", fun
     "        <li ng-repeat=\"slide in slides()\" ng-class=\"{active: isActive(slide)}\" ng-click=\"select(slide)\"></li>\n" +
     "    </ol>\n" +
     "    <div class=\"carousel-inner\" ng-transclude></div>\n" +
-    "    <a ng-click=\"prev()\" class=\"carousel-control left\" ng-show=\"slides().length > 1\">&lsaquo;</a>\n" +
-    "    <a ng-click=\"next()\" class=\"carousel-control right\" ng-show=\"slides().length > 1\">&rsaquo;</a>\n" +
+    "    <a class=\"left carousel-control\" ng-click=\"prev()\" ng-show=\"slides().length > 1\"><span class=\"icon-prev\"></span></a>\n" +
+    "    <a class=\"right carousel-control\" ng-click=\"next()\" ng-show=\"slides().length > 1\"><span class=\"icon-next\"></span></a>\n" +
     "</div>\n" +
     "");
 }]);
@@ -3256,34 +3280,42 @@ angular.module("template/carousel/slide.html", []).run(["$templateCache", functi
     "    'next': (next || active) && direction=='next',\n" +
     "    'right': direction=='prev',\n" +
     "    'left': direction=='next'\n" +
-    "  }\" class=\"item\" ng-transclude></div>\n" +
+    "  }\" class=\"item text-center\" ng-transclude></div>\n" +
     "");
 }]);
 
 angular.module("template/datepicker/datepicker.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/datepicker/datepicker.html",
-    "<table>\n" +
-    "  <thead>\n" +
-    "    <tr class=\"text-center\">\n" +
-    "      <th><button type=\"button\" class=\"btn pull-left\" ng-click=\"move(-1)\"><i class=\"icon-chevron-left\"></i></button></th>\n" +
-    "      <th colspan=\"{{rows[0].length - 2 + showWeekNumbers}}\"><button type=\"button\" class=\"btn btn-block\" ng-click=\"toggleMode()\"><strong>{{title}}</strong></button></th>\n" +
-    "      <th><button type=\"button\" class=\"btn pull-right\" ng-click=\"move(1)\"><i class=\"icon-chevron-right\"></i></button></th>\n" +
+    "<table style=\"table-layout:fixed;\" class=\"table-condensed\">\n" +
+    "  <!-- secondary: last month, disabled: disabled -->\n" +
+    "  <thead class=\"text-center\">\n" +
+    "    <tr>\n" +
+    "      <th style=\"overflow: hidden; width: 26px\">\n" +
+    "        <button type=\"button\" class=\"btn btn-xs btn-link\" ng-click=\"move(-1)\"> \n" +
+    "          <span class=\"glyphicon glyphicon-chevron-left\"> </span> \n" +
+    "        </button>\n" +
+    "      </th>\n" +
+    "      <th colspan=\"{{rows[0].length - 2 + showWeekNumbers}}\"><button type=\"button\" class=\"btn btn-md btn-link btn-block\" ng-click=\"toggleMode()\"><strong>{{title}}</strong></button></th></th>\n" +
+    "      <th style=\"overflow: hidden; width: 26px\">\n" +
+    "        <button type=\"button\" class=\"btn btn-xs btn-link\" ng-click=\"move(1)\"> \n" +
+    "          <span class=\"glyphicon glyphicon-chevron-right\"> </span> \n" +
+    "        </button>\n" +
+    "      </th>\n" +
     "    </tr>\n" +
-    "    <tr class=\"text-center\" ng-show=\"labels.length > 0\">\n" +
-    "      <th ng-show=\"showWeekNumbers\">#</th>\n" +
-    "      <th ng-repeat=\"label in labels\">{{label}}</th>\n" +
+    "    <tr ng-show=\"labels.length > 0\">\n" +
+    "      <th class=\"text-center\" ng-show=\"showWeekNumbers\"><h6>#</h6></th>\n" +
+    "      <th class=\"text-center\" ng-repeat=\"label in labels\"><h6>{{label}}</h6></th>\n" +
     "    </tr>\n" +
     "  </thead>\n" +
     "  <tbody>\n" +
     "    <tr ng-repeat=\"row in rows\">\n" +
-    "      <td ng-show=\"showWeekNumbers\" class=\"text-center\"><em>{{ getWeekNumber(row) }}</em></td>\n" +
-    "      <td ng-repeat=\"dt in row\" class=\"text-center\">\n" +
-    "        <button type=\"button\" style=\"width:100%;\" class=\"btn\" ng-class=\"{'btn-info': dt.selected}\" ng-click=\"select(dt.date)\" ng-disabled=\"dt.disabled\"><span ng-class=\"{muted: dt.secondary}\">{{dt.label}}</span></button>\n" +
+    "      <td ng-show=\"showWeekNumbers\" class=\"text-center\" style=\"overflow: hidden; width: 26px\"><button type=\"button\" class=\"btn btn-xs btn-link\" disabled><strong><em>{{ getWeekNumber(row) }}</em></strong></button></td>\n" +
+    "      <td ng-repeat=\"dt in row\" class=\"text-center\" style=\"overflow: hidden; width: 26px\">\n" +
+    "        <button type=\"button\" style=\"width: 100%; border: 0px\" class=\"btn btn-xs\" ng-class=\"{'btn-primary': dt.selected, 'btn-default': !dt.selected}\" ng-click=\"select(dt.date)\" ng-disabled=\"dt.disabled\"><span ng-class=\"{'text-muted': dt.secondary && !dt.selected}\">{{dt.label}}</span></button>\n" +
     "      </td>\n" +
     "    </tr>\n" +
     "  </tbody>\n" +
-    "</table>\n" +
-    "");
+    "</table>");
 }]);
 
 angular.module("template/datepicker/popup.html", []).run(["$templateCache", function($templateCache) {
@@ -3293,11 +3325,11 @@ angular.module("template/datepicker/popup.html", []).run(["$templateCache", func
     "	<li class=\"divider\"></li>\n" +
     "	<li style=\"padding: 9px;\">\n" +
     "		<span class=\"btn-group\">\n" +
-    "			<button class=\"btn btn-small btn-inverse\" ng-click=\"today()\">Today</button>\n" +
-    "			<button class=\"btn btn-small btn-info\" ng-click=\"showWeeks = ! showWeeks\" ng-class=\"{active: showWeeks}\">Weeks</button>\n" +
-    "			<button class=\"btn btn-small btn-danger\" ng-click=\"clear()\">Clear</button>\n" +
+    "			<button class=\"btn btn-xs btn-default\" ng-click=\"today()\">Today</button>\n" +
+    "			<button class=\"btn btn-xs btn-info\" ng-click=\"showWeeks = ! showWeeks\" ng-class=\"{active: showWeeks}\">Weeks</button>\n" +
+    "			<button class=\"btn btn-xs btn-danger\" ng-click=\"clear()\">Clear</button>\n" +
     "		</span>\n" +
-    "		<button class=\"btn btn-small btn-success pull-right\" ng-click=\"isOpen = false\">Close</button>\n" +
+    "		<button class=\"btn btn-xs btn-success pull-right\" ng-click=\"isOpen = false\">Close</button>\n" +
     "	</li>\n" +
     "</ul>");
 }]);
@@ -3316,32 +3348,18 @@ angular.module("template/dialog/message.html", []).run(["$templateCache", functi
     "");
 }]);
 
-angular.module("template/modal/backdrop.html", []).run(["$templateCache", function($templateCache) {
-  $templateCache.put("template/modal/backdrop.html",
-    "<div class=\"modal-backdrop fade in\"></div>");
-}]);
-
-angular.module("template/modal/window.html", []).run(["$templateCache", function($templateCache) {
-  $templateCache.put("template/modal/window.html",
-    "<div class=\"modal in\" ng-transclude></div>");
-}]);
-
 angular.module("template/pagination/pager.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/pagination/pager.html",
-    "<div class=\"pager\">\n" +
-    "  <ul>\n" +
+    "<ul class=\"pager\">\n" +
     "    <li ng-repeat=\"page in pages\" ng-class=\"{disabled: page.disabled, previous: page.previous, next: page.next}\"><a ng-click=\"selectPage(page.number)\">{{page.text}}</a></li>\n" +
-    "  </ul>\n" +
-    "</div>\n" +
-    "");
+    "</ul>");
 }]);
 
 angular.module("template/pagination/pagination.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/pagination/pagination.html",
-    "<div class=\"pagination\"><ul>\n" +
+    "<ul class=\"pagination\">\n" +
     "  <li ng-repeat=\"page in pages\" ng-class=\"{active: page.active, disabled: page.disabled}\"><a ng-click=\"selectPage(page.number)\">{{page.text}}</a></li>\n" +
-    "  </ul>\n" +
-    "</div>\n" +
+    "</ul>\n" +
     "");
 }]);
 
@@ -3389,14 +3407,8 @@ angular.module("template/progressbar/progress.html", []).run(["$templateCache", 
 angular.module("template/rating/rating.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/rating/rating.html",
     "<span ng-mouseleave=\"reset()\">\n" +
-    "	<i ng-repeat=\"number in range\" ng-mouseenter=\"enter(number)\" ng-click=\"rate(number)\" ng-class=\"{'icon-star': number <= val, 'icon-star-empty': number > val}\"></i>\n" +
+    "	<i ng-repeat=\"number in range\" ng-mouseenter=\"enter(number)\" ng-click=\"rate(number)\" ng-class=\"{'glyphicon glyphicon-star': number <= val, 'glyphicon glyphicon-star-empty': number > val}\"></i>\n" +
     "</span>");
-}]);
-
-angular.module("template/tabs/pane.html", []).run(["$templateCache", function($templateCache) {
-  $templateCache.put("template/tabs/pane.html",
-    "<div class=\"tab-pane\" ng-class=\"{active: selected}\" ng-show=\"selected\" ng-transclude></div>\n" +
-    "");
 }]);
 
 angular.module("template/tabs/tab.html", []).run(["$templateCache", function($templateCache) {
@@ -3404,19 +3416,6 @@ angular.module("template/tabs/tab.html", []).run(["$templateCache", function($te
     "<li ng-class=\"{active: active, disabled: disabled}\">\n" +
     "  <a ng-click=\"select()\" tab-heading-transclude>{{heading}}</a>\n" +
     "</li>\n" +
-    "");
-}]);
-
-angular.module("template/tabs/tabs.html", []).run(["$templateCache", function($templateCache) {
-  $templateCache.put("template/tabs/tabs.html",
-    "<div class=\"tabbable\">\n" +
-    "  <ul class=\"nav nav-tabs\">\n" +
-    "    <li ng-repeat=\"pane in panes\" ng-class=\"{active:pane.selected}\">\n" +
-    "      <a ng-click=\"select(pane)\">{{pane.heading}}</a>\n" +
-    "    </li>\n" +
-    "  </ul>\n" +
-    "  <div class=\"tab-content\" ng-transclude></div>\n" +
-    "</div>\n" +
     "");
 }]);
 
@@ -3446,26 +3445,44 @@ angular.module("template/tabs/tabset.html", []).run(["$templateCache", function(
 
 angular.module("template/timepicker/timepicker.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/timepicker/timepicker.html",
-    "<table class=\"form-inline\">\n" +
-    "	<tr class=\"text-center\">\n" +
-    "		<td><a ng-click=\"incrementHours()\" class=\"btn btn-link\"><i class=\"icon-chevron-up\"></i></a></td>\n" +
-    "		<td>&nbsp;</td>\n" +
-    "		<td><a ng-click=\"incrementMinutes()\" class=\"btn btn-link\"><i class=\"icon-chevron-up\"></i></a></td>\n" +
-    "		<td ng-show=\"showMeridian\"></td>\n" +
-    "	</tr>\n" +
-    "	<tr>\n" +
-    "		<td class=\"control-group\" ng-class=\"{'error': !validHours}\"><input type=\"text\" ng-model=\"hours\" ng-change=\"updateHours()\" class=\"span1 text-center\" ng-mousewheel=\"incrementHours()\" ng-readonly=\"readonlyInput\" maxlength=\"2\" /></td>\n" +
-    "		<td>:</td>\n" +
-    "		<td class=\"control-group\" ng-class=\"{'error': !validMinutes}\"><input type=\"text\" ng-model=\"minutes\" ng-change=\"updateMinutes()\" class=\"span1 text-center\" ng-readonly=\"readonlyInput\" maxlength=\"2\"></td>\n" +
-    "		<td ng-show=\"showMeridian\"><button ng-click=\"toggleMeridian()\" class=\"btn text-center\">{{meridian}}</button></td>\n" +
-    "	</tr>\n" +
-    "	<tr class=\"text-center\">\n" +
-    "		<td><a ng-click=\"decrementHours()\" class=\"btn btn-link\"><i class=\"icon-chevron-down\"></i></a></td>\n" +
-    "		<td>&nbsp;</td>\n" +
-    "		<td><a ng-click=\"decrementMinutes()\" class=\"btn btn-link\"><i class=\"icon-chevron-down\"></i></a></td>\n" +
-    "		<td ng-show=\"showMeridian\"></td>\n" +
-    "	</tr>\n" +
-    "</table>");
+    "<form class=\"form-inline\">\n" +
+    "    <div class=\"row\">\n" +
+    "        <div class=\"col-md-4 text-center\">\n" +
+    "            <a ng-click=\"incrementHours()\" class=\"btn btn-link\"><i class=\"glyphicon glyphicon-chevron-up\"></i></a>\n" +
+    "        </div>\n" +
+    "        <div class=\"col-md-6 text-center\">\n" +
+    "            <a ng-click=\"incrementMinutes()\" class=\"btn btn-link\"><i class=\"glyphicon glyphicon-chevron-up\"></i></a>\n" +
+    "        </div>\n" +
+    "        <div class=\"col-md-2\"> </div>\n" +
+    "    </div>\n" +
+    "\n" +
+    "    <div class=\"row\">\n" +
+    "        <div class=\"col-md-4\">\n" +
+    "            <div class=\"form-group\" ng-class=\"{'has-error': invalidHours}\" style=\"margin-bottom: 0px\">\n" +
+    "                <input type=\"text\" ng-model=\"hours\" ng-change=\"updateHours()\" class=\"form-control text-center\" ng-mousewheel=\"incrementHours()\" ng-readonly=\"readonlyInput\" maxlength=\"2\" /> \n" +
+    "            </div>\n" +
+    "        </div>\n" +
+    "        <div class=\"col-md-6\">\n" +
+    "            <div class=\"input-group\" ng-class=\"{'has-error': invalidMinutes}\">\n" +
+    "                <span class=\"input-group-addon\">:</span>\n" +
+    "                <input type=\"text\" ng-model=\"minutes\" ng-change=\"updateMinutes()\" class=\"form-control text-center\" ng-readonly=\"readonlyInput\" maxlength=\"2\">\n" +
+    "            </div>\n" +
+    "        </div>\n" +
+    "        <div class=\"col-md-2\">\n" +
+    "            <button ng-click=\"toggleMeridian()\" class=\"btn btn-default text-center\" ng-show=\"showMeridian\">{{meridian}}</button>\n" +
+    "        </div>\n" +
+    "    </div>\n" +
+    "\n" +
+    "    <div class=\"row\">\n" +
+    "        <div class=\"col-md-4 text-center\">\n" +
+    "            <a ng-click=\"decrementHours()\" class=\"btn btn-link\"><i class=\"glyphicon glyphicon-chevron-down\"></i></a>\n" +
+    "        </div>\n" +
+    "        <div class=\"col-md-6 text-center\">\n" +
+    "            <a ng-click=\"decrementMinutes()\" class=\"btn btn-link\"><i class=\"glyphicon glyphicon-chevron-down\"></i></a>\n" +
+    "        </div>\n" +
+    "        <div class=\"col-md-2\"> </div>\n" +
+    "    </div>\n" +
+    "</form>");
 }]);
 
 angular.module("template/typeahead/typeahead-match.html", []).run(["$templateCache", function($templateCache) {
@@ -3475,18 +3492,9 @@ angular.module("template/typeahead/typeahead-match.html", []).run(["$templateCac
 
 angular.module("template/typeahead/typeahead-popup.html", []).run(["$templateCache", function($templateCache) {
   $templateCache.put("template/typeahead/typeahead-popup.html",
-    "<ul class=\"typeahead dropdown-menu\" ng-style=\"{display: isOpen()&&'block' || 'none', top: position.top+'px', left: position.left+'px'}\">\n" +
+    "<ul class=\"dropdown-menu\" ng-style=\"{display: isOpen()&&'block' || 'none', top: position.top+'px', left: position.left+'px'}\">\n" +
     "    <li ng-repeat=\"match in matches\" ng-class=\"{active: isActive($index) }\" ng-mouseenter=\"selectActive($index)\" ng-click=\"selectMatch($index)\">\n" +
     "        <typeahead-match index=\"$index\" match=\"match\" query=\"query\" template-url=\"templateUrl\"></typeahead-match>\n" +
-    "    </li>\n" +
-    "</ul>");
-}]);
-
-angular.module("template/typeahead/typeahead.html", []).run(["$templateCache", function($templateCache) {
-  $templateCache.put("template/typeahead/typeahead.html",
-    "<ul class=\"typeahead dropdown-menu\" ng-style=\"{display: isOpen()&&'block' || 'none', top: position.top+'px', left: position.left+'px'}\">\n" +
-    "    <li ng-repeat=\"match in matches\" ng-class=\"{active: isActive($index) }\" ng-mouseenter=\"selectActive($index)\">\n" +
-    "        <a tabindex=\"-1\" ng-click=\"selectMatch($index)\" ng-bind-html-unsafe=\"match.label | typeaheadHighlight:query\"></a>\n" +
     "    </li>\n" +
     "</ul>");
 }]);
